@@ -1,0 +1,580 @@
+<title>Flicker Finder</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600&display=swap">
+<style>
+/* Layout: one full-screen camera stage; a slim status strip on top, a control dock at the bottom,
+   heat glows over the picture. Single dark look on purpose (a viewfinder), every color a token. */
+:root {
+  --ink: #0b0d10;            /* stage and bars */
+  --panel: rgba(16, 19, 24, .82);
+  --line: rgba(220, 230, 240, .16);
+  --fg: #e8edf2;
+  --muted: #93a0ad;
+  --hot: #ff5a36;            /* flicker */
+  --warm: #ffb21e;
+  --calm: #5fd3a8;           /* steady light */
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color-scheme: dark;
+}
+html, body { height: 100%; }
+[hidden] { display: none !important; }
+body { background: var(--ink); color: var(--fg); font-family: var(--sans); overflow: hidden; -webkit-tap-highlight-color: transparent; }
+#stage { position: fixed; inset: 0; overflow: hidden; background: var(--ink); touch-action: manipulation; }
+#stage video, #stage #demo { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+#heat { position: absolute; inset: 0; width: 100%; height: 100%; }
+.bar { position: absolute; left: 0; right: 0; display: flex; align-items: center; gap: 8px; z-index: 3;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+#top { top: 0; padding-top: calc(10px + env(safe-area-inset-top, 0px)); padding-bottom: 10px;
+  background: linear-gradient(var(--panel), transparent); }
+#dock { bottom: 0; padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px)); padding-top: 14px; justify-content: center; flex-wrap: wrap;
+  background: linear-gradient(transparent, var(--panel) 40%); }
+.mark { display: flex; align-items: center; gap: 6px; font: 600 13px/1 var(--mono); letter-spacing: .06em; text-transform: uppercase; }
+.mark svg { width: 20px; height: 20px; color: var(--warm); }
+.chip { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 10px; border-radius: 14px;
+  border: 1px solid var(--line); background: var(--panel); color: var(--fg); font: 500 12px/1 var(--mono); white-space: nowrap; }
+.chip svg { width: 15px; height: 15px; }
+.chip.ok { color: var(--calm); }
+.chip.warn { color: var(--warm); }
+.grow { flex: 1; }
+button { font: inherit; color: inherit; }
+.ibtn { width: 44px; height: 44px; border-radius: 22px; border: 1px solid var(--line); background: var(--panel); color: var(--fg);
+  display: inline-grid; place-items: center; cursor: pointer; position: relative; padding: 0; }
+.ibtn svg { width: 22px; height: 22px; }
+.ibtn .n { position: absolute; right: -2px; bottom: -2px; min-width: 18px; height: 18px; border-radius: 9px; padding: 0 4px;
+  background: var(--fg); color: var(--ink); font: 600 10px/18px var(--mono); }
+.ibtn:focus-visible, .chip:focus-visible, #sens:focus-visible { outline: 2px solid var(--warm); outline-offset: 2px; }
+.ibtn.main { width: 60px; height: 60px; border-radius: 30px; border-width: 2px; border-color: var(--fg); }
+.ibtn.main svg { width: 26px; height: 26px; }
+.ibtn.on { border-color: var(--warm); color: var(--warm); }
+.sens { display: flex; align-items: center; gap: 6px; height: 44px; padding: 0 12px; border-radius: 22px; border: 1px solid var(--line); background: var(--panel); }
+.sens svg { width: 18px; height: 18px; color: var(--muted); flex: none; }
+#sens { width: 112px; accent-color: var(--warm); }
+button.chip { cursor: pointer; }
+@media (max-width: 420px) { .mark span { display: none; } }
+#pin { position: absolute; z-index: 4; left: max(16px, env(safe-area-inset-left, 0px)); right: max(16px, env(safe-area-inset-right, 0px));
+  bottom: calc(96px + env(safe-area-inset-bottom, 0px)); margin: 0 auto; max-width: 420px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; display: grid; gap: 6px;
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+#pin .row { display: flex; align-items: center; gap: 10px; font: 500 12px/1 var(--mono); color: var(--muted); }
+#pin .big { font: 600 22px/1 var(--mono); color: var(--fg); font-variant-numeric: tabular-nums; }
+#pin .row span { font-variant-numeric: tabular-nums; }
+#pin canvas { width: 100%; height: 56px; display: block; }
+#pin .x { margin-left: auto; width: 30px; height: 30px; border-radius: 15px; border: 1px solid var(--line); background: none; display: grid; place-items: center; cursor: pointer; }
+#pin .x svg { width: 14px; height: 14px; }
+#msg { position: absolute; z-index: 5; inset: 0; display: grid; place-items: center; padding: 24px max(16px, env(safe-area-inset-left, 0px));
+  background: rgba(11, 13, 16, .72); }
+#msg .card { max-width: 340px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 18px; display: grid; gap: 12px; justify-items: center; text-align: center; }
+#msg .card > svg { width: 40px; height: 40px; color: var(--hot); }
+#msg p { margin: 0; line-height: 1.45; color: var(--fg); }
+#msg small { color: var(--muted); line-height: 1.45; }
+#msg .acts { display: flex; gap: 10px; }
+#legend { position: absolute; z-index: 5; top: calc(54px + env(safe-area-inset-top, 0px)); right: max(16px, env(safe-area-inset-right, 0px));
+  width: min(300px, calc(100% - 32px)); background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px;
+  display: grid; gap: 9px; font-size: 13px; line-height: 1.35; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+#legend div { display: grid; grid-template-columns: 22px 1fr; gap: 8px; align-items: start; }
+#legend svg { width: 20px; height: 20px; color: var(--warm); }
+#legend .ramp { height: 10px; border-radius: 5px; background: linear-gradient(90deg, transparent, var(--warm), var(--hot), #fff); border: 1px solid var(--line); }
+#tip { position: absolute; z-index: 6; max-width: 220px; padding: 6px 9px; border-radius: 8px; background: var(--fg); color: var(--ink);
+  font-size: 12px; line-height: 1.35; pointer-events: none; }
+input[type=file] { display: none; }
+@media (max-width: 360px) { #sens { width: 72px; } .ibtn { width: 40px; height: 40px; } .ibtn.main { width: 54px; height: 54px; } }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div id="stage">
+  <canvas id="demo" width="360" height="640" aria-label="Demo ceiling"></canvas>
+  <video id="video" playsinline muted hidden></video>
+  <canvas id="heat"></canvas>
+
+  <div class="bar" id="top">
+    <div class="mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="9" width="18" height="6" rx="1.5"/><path d="M7 5l1 2M12 4v2.5M17 5l-1 2M7 19l1-2M12 20v-2.5M17 19l-1-2"/></svg><span>Flicker</span></div>
+    <span class="grow"></span>
+    <button class="chip" id="mode" aria-label="Detection mode" data-tip=""></button>
+    <button class="chip" id="grid" aria-label="Grid size" data-tip="Grid: columns across the picture. Tap to change.">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="4" width="16" height="16" rx="1.5"/><path d="M9.3 4v16M14.7 4v16M4 9.3h16M4 14.7h16"/></svg><span id="gridn">6</span></button>
+    <span class="chip" id="exp" data-tip=""></span>
+    <button class="ibtn" id="info" style="width:32px;height:32px" aria-label="What the symbols mean" data-tip="What the symbols mean">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/></svg></button>
+  </div>
+
+  <div class="bar" id="dock">
+    <button class="ibtn" id="cam" aria-label="Use the camera" data-tip="Rear camera">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M4 8h3l2-2.5h6L17 8h3v11H4z"/><circle cx="12" cy="13.5" r="3.5"/></svg></button>
+    <button class="ibtn" id="clip" aria-label="Open a video clip" data-tip="Analyze a video clip from your phone">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3z"/></svg></button>
+    <button class="ibtn main" id="run" aria-label="Pause" data-tip="Pause / resume">
+      <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg></button>
+    <label class="sens" data-tip="Sensitivity: slide right to show weaker flicker">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 12h3l2-5 3 10 3-8 2 3h5"/></svg>
+      <input type="range" id="sens" min="0.3" max="3" step="0.1" value="1" aria-label="Sensitivity"></label>
+    <input type="file" id="file" accept="video/*">
+  </div>
+
+  <div id="pin" hidden>
+    <div class="row"><span class="big" id="pscore">0</span><span id="pfreq" data-tip="Strongest slow flicker frequency">&#x2013; Hz</span><span id="pband" data-tip="Rolling-shutter banding (fast 120 Hz flicker)">&#x2261; &#x2013;</span>
+      <button class="x" id="unpin" aria-label="Unpin"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+    <canvas id="trace" data-tip="Brightness of the pinned spot over the last 3 s, corrected for the camera's own exposure"></canvas>
+  </div>
+
+  <div id="legend" hidden>
+    <div><span class="ramp" style="margin-top:5px"></span><span>Glow = flicker. Clear cells are steady.</span></div>
+    <div><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2" fill="currentColor"/></svg><span>Worst spot right now, with its score (0&#x2013;100).</span></div>
+    <div><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 3v6M12 15v6M3 12h6M15 12h6"/></svg><span>Tap the picture to pin a spot: live trace, score, Hz and banding.</span></div>
+    <div><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 12c2-6 4-6 6 0s4 6 6 0 4-6 6 0"/></svg><span>Slow flicker you can see: dropouts, strobing, a cycling tube (1&#x2013;15 Hz).</span></div>
+    <div><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 6h16M4 10h16M4 14h16M4 18h16"/></svg><span>Fast flicker (120 Hz) seen as stripes from the camera's rolling shutter. Best with a short exposure.</span></div>
+    <div><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg><span>Top right: exposure. "1/&#x2026;" means a short manual exposure is set; "auto" means the phone controls it and fast flicker is harder to see.</span></div>
+  </div>
+
+  <div id="msg" hidden><div class="card">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M4 8h3l2-2.5h6L17 8h3v11H4z"/><path d="M3 3l18 18"/></svg>
+    <p id="msgtext">Camera blocked.</p>
+    <small id="msghelp">Allow the camera for this page in your browser settings, then tap the camera again. Or record a 5 s clip of the ceiling and open it here.</small>
+    <div class="acts">
+      <button class="ibtn" id="msgclip" aria-label="Open a video clip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3z"/></svg></button>
+      <button class="ibtn" id="msgdemo" aria-label="Back to the demo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    </div></div></div>
+  <div id="tip" hidden></div>
+</div>
+
+<script>
+'use strict';
+// \u2500\u2500\u2500 Analysis (pure: frames in, scores out; window.FF exposes it for tests) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+const WINDOW_S = 2.6;                     // rolling window for slow flicker
+const FREQS = []; for (let f = 1; f <= 15; f += 0.5) FREQS.push(f);
+
+function smoothstep(a, b, x) { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); }
+function median(arr) { if (!arr.length) return 0; const s = Float64Array.from(arr).sort(); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; }
+
+// Mean of the tightest run holding a third of the values (at least 3): robust even when the
+// flickering cells are not a minority, as long as they don't agree with each other.
+function tightest(values) {
+  const v = Float64Array.from(values).sort(), h = Math.min(v.length, Math.max(3, Math.ceil(v.length / 3)));
+  let best = 0;
+  for (let i = 1; i + h <= v.length; i++) if (v[i + h - 1] - v[i] < v[best + h - 1] - v[best]) best = i;
+  let s = 0; for (let i = best; i < best + h; i++) s += v[i];
+  return s / h;
+}
+
+class Analyzer {
+  constructor(cols, rows, aw, ah) {
+    Object.assign(this, {cols, rows, aw, ah});
+    const n = cols * rows;
+    this.hist = Array.from({length: n}, () => []);     // [t, normalized brightness]
+    this.raw = new Float32Array(n);                     // cell mean luma (0..255)
+    this.slow = new Float32Array(n); this.freq = new Float32Array(n);
+    this.bandRaw = new Float32Array(n); this.fast = new Float32Array(n);
+    this.score = new Float32Array(n);
+    this.ema = new Float32Array(n);                     // each cell's slow average (~2 s)
+    this.profAvg = new Map();                           // stripe profiles' recent average, per cell+direction
+    this.lum = new Float32Array(aw * ah);
+    this.frames = 0;
+  }
+  cellBox(c) {
+    const cx = c % this.cols, cy = (c / this.cols) | 0;
+    return [Math.floor(cx * this.aw / this.cols), Math.floor(cy * this.ah / this.rows),
+            Math.floor((cx + 1) * this.aw / this.cols), Math.floor((cy + 1) * this.ah / this.rows)];
+  }
+  // data: RGBA bytes aw x ah; t: seconds
+  frame(data, t) {
+    const {aw, ah, lum, cols, rows} = this, n = cols * rows;
+    for (let i = 0, p = 0; i < aw * ah; i++, p += 4) lum[i] = (data[p] * 2 + data[p + 1] * 5 + data[p + 2]) / 8;
+    let max = 1;
+    for (let c = 0; c < n; c++) {
+      const [x0, y0, x1, y1] = this.cellBox(c);
+      let s = 0;
+      for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) s += lum[y * aw + x];
+      this.raw[c] = s / ((x1 - x0) * (y1 - y0));
+      if (this.raw[c] > max) max = this.raw[c];
+    }
+    // Exposure: each cell against its own slow average. The camera's auto-exposure moves every
+    // steady cell's ratio by the same factor, so the tightest cluster of ratios over lit cells is
+    // its gain; flickering cells scatter (each covers a different share of the bad fixture).
+    const dt = this.lastT === undefined ? 1 : Math.min(1, Math.max(0, t - this.lastT) / 2);
+    this.lastT = t;
+    const ratio = new Float32Array(n), lit = [];
+    for (let c = 0; c < n; c++) {
+      this.ema[c] = this.frames === 0 ? this.raw[c] : this.ema[c] + (this.raw[c] - this.ema[c]) * dt;
+      ratio[c] = this.raw[c] / Math.max(this.ema[c], 1);
+      if (this.raw[c] >= max * 0.35) lit.push(ratio[c]);
+    }
+    const gain = lit.length >= 3 ? tightest(lit) : median(Array.from(ratio));
+    this.gain = gain;
+    for (let c = 0; c < n; c++) {
+      const h = this.hist[c];
+      h.push([t, ratio[c] / Math.max(gain, 1e-3)]);
+      while (h.length && t - h[0][0] > WINDOW_S) h.shift();
+    }
+    this.frames++;
+    // Slow flicker: coefficient of variation x share of variance in one 1-15 Hz peak.
+    const w = new Float32Array(n);
+    for (let c = 0; c < n; c++) {
+      w[c] = smoothstep(0.12, 0.4, this.raw[c] / max);
+      const h = this.hist[c];
+      if (h.length < 12 || h[h.length - 1][0] - h[0][0] < 1.0) { this.slow[c] = 0; continue; }
+      let mu = 0; for (const [, v] of h) mu += v; mu /= h.length;
+      let tot = 0; for (const [, v] of h) tot += (v - mu) ** 2;
+      const cv = Math.sqrt(tot / h.length) / Math.max(mu, 1e-3);
+      let best = 0, bestF = 0;
+      if (tot > 0) for (const f of FREQS) {
+        let re = 0, im = 0; const k = 2 * Math.PI * f;
+        for (const [tt, v] of h) { re += (v - mu) * Math.cos(k * tt); im -= (v - mu) * Math.sin(k * tt); }
+        const frac = (re * re + im * im) / (h.length * tot / 2);
+        if (frac > best) { best = frac; bestF = f; }
+      }
+      this.freq[c] = bestF;
+      this.slow[c] = cv * (0.4 + 0.6 * Math.min(1, best)) * w[c];
+    }
+    // Fast flicker: rolling-shutter stripes. Bright-pixel profile along rows and along columns
+    // (portrait phones turn the stripes vertical) over the cell and its neighbors, divided by its
+    // own moving average; contrast x periodicity, smoothed over time.
+    for (let c = 0; c < n; c++) {
+      const b = Math.max(this.stripes(c, true), this.stripes(c, false));
+      this.bandRaw[c] = this.frames === 1 ? b : this.bandRaw[c] * 0.85 + b * 0.15;
+    }
+    const litBand = []; for (let c = 0; c < n; c++) if (w[c] > 0.5) litBand.push(this.bandRaw[c]);
+    const base = litBand.length >= 3 ? median(litBand) : 0;
+    for (let c = 0; c < n; c++) {
+      // Stripes are judged over neighbors too, so only a cell that is itself lit gets the score.
+      this.fast[c] = Math.max(0, this.bandRaw[c] - base) * smoothstep(0.3, 0.6, this.raw[c] / max);
+    }
+    // A neighbor that flickers slowly as a whole leaks into this cell's stripe window; it already
+    // glows itself, so don't credit stripes here.
+    const fast = Float32Array.from(this.fast);
+    for (let c = 0; c < n; c++) {
+      const cx = c % cols, cy = (c / cols) | 0; let nb = 0;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const x = cx + dx, y = cy + dy; if ((dx || dy) && x >= 0 && y >= 0 && x < cols && y < rows) nb = Math.max(nb, this.slow[y * cols + x]);
+      }
+      this.fast[c] = fast[c] * (1 - smoothstep(0.03, 0.08, nb - this.slow[c]));
+    }
+    return this;
+  }
+  stripes(c, rowsDir) {
+    const {aw, ah, lum, cols, rows} = this;
+    const cx = c % cols, cy = (c / cols) | 0;
+    const ext = rowsDir ? [Math.floor(cx * aw / cols), Math.floor(Math.max(0, cy - 1) * ah / rows), Math.floor((cx + 1) * aw / cols), Math.floor(Math.min(rows, cy + 2) * ah / rows)]
+                        : [Math.floor(Math.max(0, cx - 1) * aw / cols), Math.floor(cy * ah / rows), Math.floor(Math.min(cols, cx + 2) * aw / cols), Math.floor((cy + 1) * ah / rows)];
+    const [x0, y0, x1, y1] = ext;
+    let peak = 0;
+    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) if (lum[y * aw + x] > peak) peak = lum[y * aw + x];
+    if (peak < 40) return 0;
+    const thr = peak * 0.4;
+    const len = rowsDir ? y1 - y0 : x1 - x0;
+    const prof = new Float32Array(len).fill(NaN);
+    for (let i = 0; i < len; i++) {
+      let s = 0, k = 0;
+      if (rowsDir) { const y = y0 + i; for (let x = x0; x < x1; x++) { const v = lum[y * aw + x]; if (v > thr) { s += v; k++; } } }
+      else { const x = x0 + i; for (let y = y0; y < y1; y++) { const v = lum[y * aw + x]; if (v > thr) { s += v; k++; } } }
+      if (k >= 2) prof[i] = s / k;
+    }
+    // Against this profile's own recent average: tube gaps, edges and louvers stay put and cancel;
+    // rolling-shutter stripes drift from frame to frame and remain.
+    const key = c * 2 + (rowsDir ? 0 : 1);
+    let avg = this.profAvg.get(key);
+    if (!avg || avg.length !== len) { avg = Float32Array.from(prof); this.profAvg.set(key, avg); }
+    const r = [];
+    for (let i = 0; i < len; i++) {
+      if (Number.isNaN(prof[i])) { r.push(NaN); continue; }
+      if (Number.isNaN(avg[i])) { avg[i] = prof[i]; r.push(NaN); continue; }
+      r.push(prof[i] / avg[i] - 1);
+      avg[i] += (prof[i] - avg[i]) * 0.08;
+    }
+    { const ok = r.filter(v => !Number.isNaN(v)), m = ok.length ? ok.reduce((x, y) => x + y, 0) / ok.length : 0;
+      for (let i = 0; i < len; i++) if (!Number.isNaN(r[i])) r[i] -= m; }    // exposure moves the whole profile
+    // High-pass: a neighboring fixture that flickers as a whole is a step, not stripes.
+    { const hp = Math.max(2, Math.round(len / 10)), out = r.slice();
+      for (let i = 0; i < len; i++) {
+        if (Number.isNaN(r[i])) continue;
+        let s = 0, k = 0;
+        for (let j = Math.max(0, i - hp); j <= Math.min(len - 1, i + hp); j++) if (!Number.isNaN(r[j])) { s += r[j]; k++; }
+        out[i] = r[i] - s / k;
+      }
+      r.splice(0, len, ...out); }
+    const vals = r.filter(v => !Number.isNaN(v));
+    if (vals.length < 8) return 0;
+    const sd = Math.sqrt(vals.reduce((a, v) => a + v * v, 0) / vals.length);
+    // Periodicity: best normalized autocorrelation at lags 2..len/2.
+    let ac = 0;
+    for (let lag = 2; lag <= len >> 1; lag++) {
+      let num = 0, d1 = 0, d2 = 0;
+      for (let i = 0; i + lag < len; i++) { const a = r[i], b = r[i + lag]; if (Number.isNaN(a) || Number.isNaN(b)) continue; num += a * b; d1 += a * a; d2 += b * b; }
+      if (d1 > 0 && d2 > 0) ac = Math.max(ac, num / Math.sqrt(d1 * d2));
+    }
+    return sd * ac * ac;            // stripes repeat; steps and noise don't
+  }
+  // mode: 'both' | 'slow' | 'fast'; returns heat 0..1 per cell
+  heat(mode, sens) {
+    const n = this.cols * this.rows, out = new Float32Array(n);
+    for (let c = 0; c < n; c++) {
+      const s = Math.max(0, this.slow[c] - 0.02) / 0.10;       // 10 % brightness swing ~ full heat
+      const f = Math.max(0, this.fast[c] - 0.004) / 0.03;      // ~4 % periodic stripe contrast ~ full heat
+      const v = mode === 'slow' ? s : mode === 'fast' ? f : Math.max(s, f);
+      out[c] = Math.min(1, v * sens);
+    }
+    return out;
+  }
+}
+
+// \u2500\u2500\u2500 Demo ceiling: 2 x 4 troffers; one drops out at ~5 Hz, one has uneven 120 Hz stripes \u2500\u2500\u2500\u2500\u2500
+const demo = document.getElementById('demo');
+function drawDemo(ctx, t, W, H) {
+  ctx.fillStyle = '#3a3d40'; ctx.fillRect(0, 0, W, H);
+  ctx.strokeStyle = '#2c2f32'; ctx.lineWidth = 2;                 // ceiling tile grid
+  for (let x = 0; x <= W; x += W / 6) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
+  for (let y = 0; y <= H; y += H / 12) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+  const fw = W * 0.3, fh = H * 0.13;
+  for (let r = 0; r < 4; r++) for (let k = 0; k < 2; k++) {
+    const x = W * (k ? 0.6 : 0.1), y = H * (0.07 + r * 0.235), id = r * 2 + k;
+    let level = 1;
+    if (id === 5) level = (Math.sin(2 * Math.PI * 4.7 * t) > 0.15 ? 1 : 0.35) * (0.9 + 0.1 * Math.sin(17 * t));
+    ctx.fillStyle = '#d9dcdc'; ctx.fillRect(x - 4, y - 4, fw + 8, fh + 8);
+    for (let tube = 0; tube < 2; tube++) {
+      const tx = x + 6, ty = y + 6 + tube * fh / 2, tw = fw - 12, th = fh / 2 - 12;
+      const g = Math.round(235 * level + 20);
+      ctx.fillStyle = `rgb(${g},${g},${Math.min(255, g + 8)})`; ctx.fillRect(tx, ty, tw, th);
+      if (id === 2) {                                                 // stripes drifting down
+        for (let yy = 0; yy < th; yy++) {
+          const a = 0.5 + 0.5 * Math.sin(2 * Math.PI * ((ty + yy) / 22 - t * 0.7));
+          ctx.fillStyle = `rgba(0,0,0,${0.32 * a * a})`; ctx.fillRect(tx, ty + yy, tw, 1);
+        }
+      }
+    }
+  }
+}
+
+// \u2500\u2500\u2500 App \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+const $ = id => document.getElementById(id);
+const stage = $('stage'), video = $('video'), heatC = $('heat'), hctx = heatC.getContext('2d');
+const work = document.createElement('canvas'), wctx = work.getContext('2d', {willReadFrequently: true});
+const small = document.createElement('canvas'), sctx = small.getContext('2d');
+const S = {source: 'demo', running: true, cols: 6, mode: 'both', sens: 1, pin: null, an: null, heat: null, shown: null,
+           stream: null, exposure: null, lastMedia: -1, t0: performance.now()};
+const GRIDS = [4, 6, 8, 12];
+const ICON = {
+  both: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 9c2-4 3-4 5 0s3 4 5 0 3-4 5 0"/><path d="M4 15h16M4 19h16"/></svg>',
+  slow: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 12c2-6 4-6 6 0s4 6 6 0 4-6 6 0"/></svg>',
+  fast: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 6h16M4 10h16M4 14h16M4 18h16"/></svg>',
+  play: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15l12-7.5z"/></svg>',
+  pause: '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>',
+  sun: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>',
+};
+const MODE_TIP = {both: 'Detecting slow and fast flicker', slow: 'Slow flicker only (visible strobing, dropouts)', fast: 'Fast flicker only (rolling-shutter stripes)'};
+
+function sourceEl() { return S.source === 'demo' ? demo : video; }
+function sourceSize() { return S.source === 'demo' ? [demo.width, demo.height] : [video.videoWidth, video.videoHeight]; }
+
+function layout() {
+  const W = stage.clientWidth, H = stage.clientHeight, dpr = Math.min(devicePixelRatio || 1, 2);
+  heatC.width = Math.round(W * dpr); heatC.height = Math.round(H * dpr);
+  const aw = W >= H ? 192 : 120, ah = Math.min(360, Math.round(aw * H / W));
+  work.width = aw; work.height = ah;
+  const rows = Math.max(2, Math.round(S.cols * H / W));
+  S.an = new Analyzer(S.cols, rows, aw, ah);
+  small.width = S.cols; small.height = rows;
+  S.shown = new Float32Array(S.cols * rows);
+  if (S.pin !== null && S.pin >= S.cols * rows) setPin(null);
+}
+
+function grab(now) {
+  const [sw, sh] = sourceSize(); if (!sw || !sh) return false;
+  const W = stage.clientWidth, H = stage.clientHeight, k = Math.max(W / sw, H / sh);
+  const vw = W / k, vh = H / k;                       // what object-fit: cover shows
+  wctx.drawImage(sourceEl(), (sw - vw) / 2, (sh - vh) / 2, vw, vh, 0, 0, work.width, work.height);
+  S.an.frame(wctx.getImageData(0, 0, work.width, work.height).data, now);
+  return true;
+}
+
+function heatColor(h) {   // transparent -> amber -> hot red -> white core
+  const stops = [[0, [255, 178, 30, 0]], [0.35, [255, 178, 30, 0.55]], [0.7, [255, 90, 54, 0.75]], [1, [255, 245, 235, 0.9]]];
+  for (let i = 1; i < stops.length; i++) if (h <= stops[i][0]) {
+    const [a, ca] = stops[i - 1], [b, cb] = stops[i], u = (h - a) / (b - a);
+    return ca.map((v, j) => v + (cb[j] - v) * u);
+  }
+  return stops[3][1];
+}
+
+function render() {
+  const an = S.an, W = heatC.width, H = heatC.height;
+  hctx.clearRect(0, 0, W, H);
+  if (!an) return;
+  const n = an.cols * an.rows, heat = an.heat(S.mode, S.sens);
+  for (let c = 0; c < n; c++) S.shown[c] = S.shown[c] * 0.7 + heat[c] * 0.3;
+  const img = sctx.createImageData(an.cols, an.rows);
+  let worst = -1, ws = 0;
+  for (let c = 0; c < n; c++) {
+    const h = S.shown[c]; if (h > ws) { ws = h; worst = c; }
+    const [r, g, b, a] = h < 0.06 ? [0, 0, 0, 0] : heatColor(h);
+    img.data.set([r, g, b, Math.round(a * 255)], c * 4);
+  }
+  sctx.putImageData(img, 0, 0);
+  hctx.imageSmoothingEnabled = true; hctx.imageSmoothingQuality = 'high';
+  hctx.globalCompositeOperation = 'lighter';
+  hctx.drawImage(small, 0, 0, W, H);
+  hctx.globalCompositeOperation = 'source-over';
+  const cw = W / an.cols, ch = H / an.rows, dpr = W / stage.clientWidth;
+  hctx.strokeStyle = 'rgba(232,237,242,0.10)'; hctx.lineWidth = 1;
+  hctx.beginPath();
+  for (let x = 1; x < an.cols; x++) { hctx.moveTo(x * cw, 0); hctx.lineTo(x * cw, H); }
+  for (let y = 1; y < an.rows; y++) { hctx.moveTo(0, y * ch); hctx.lineTo(W, y * ch); }
+  hctx.stroke();
+  if (worst >= 0 && ws > 0.25) {
+    const x = (worst % an.cols + 0.5) * cw, y = (((worst / an.cols) | 0) + 0.5) * ch, r = Math.min(cw, ch) * 0.42;
+    hctx.strokeStyle = '#fff'; hctx.lineWidth = 2.5 * dpr;
+    hctx.beginPath(); hctx.arc(x, y, r, 0, 2 * Math.PI); hctx.stroke();
+    hctx.fillStyle = '#fff'; hctx.beginPath(); hctx.arc(x, y, 3 * dpr, 0, 2 * Math.PI); hctx.fill();
+    hctx.font = `600 ${13 * dpr}px ${getComputedStyle(document.body).getPropertyValue('--mono')}`;
+    const label = String(Math.round(ws * 100)), tw = hctx.measureText(label).width;
+    hctx.fillStyle = 'rgba(11,13,16,0.75)'; hctx.fillRect(x + r + 4 * dpr, y - 10 * dpr, tw + 10 * dpr, 20 * dpr);
+    hctx.fillStyle = '#fff'; hctx.textBaseline = 'middle'; hctx.fillText(label, x + r + 9 * dpr, y);
+  }
+  S.worst = worst; S.worstHeat = ws;
+  if (S.pin !== null) {
+    const x = (S.pin % an.cols + 0.5) * cw, y = (((S.pin / an.cols) | 0) + 0.5) * ch, r = 9 * dpr;
+    hctx.strokeStyle = '#5fd3a8'; hctx.lineWidth = 2 * dpr;
+    hctx.beginPath(); hctx.moveTo(x - 2 * r, y); hctx.lineTo(x - r / 2, y); hctx.moveTo(x + r / 2, y); hctx.lineTo(x + 2 * r, y);
+    hctx.moveTo(x, y - 2 * r); hctx.lineTo(x, y - r / 2); hctx.moveTo(x, y + r / 2); hctx.lineTo(x, y + 2 * r); hctx.stroke();
+    drawPin();
+  }
+}
+
+const trace = $('trace'), tctx = trace.getContext('2d');
+function drawPin() {
+  const an = S.an, c = S.pin, h = an.hist[c];
+  $('pscore').textContent = Math.round(S.shown[c] * 100);
+  $('pfreq').textContent = an.slow[c] > 0.015 ? `${an.freq[c].toFixed(1)} Hz` : '\u2013 Hz';
+  $('pband').textContent = `\u2261 ${(an.bandRaw[c] * 100).toFixed(1)}%`;
+  const dpr = Math.min(devicePixelRatio || 1, 2), W = Math.round(trace.clientWidth * dpr), H = Math.round(trace.clientHeight * dpr);
+  if (trace.width !== W) { trace.width = W; trace.height = H; }
+  tctx.clearRect(0, 0, W, H);
+  if (h.length < 2) return;
+  let lo = Infinity, hi = -Infinity; for (const [, v] of h) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
+  const mid = (lo + hi) / 2, span = Math.max(hi - lo, mid * 0.08, 0.02);
+  const t1 = h[h.length - 1][0], X = t => W - (t1 - t) / WINDOW_S * W, Y = v => H / 2 - (v - mid) / span * (H * 0.84);
+  tctx.strokeStyle = 'rgba(232,237,242,0.12)'; tctx.lineWidth = 1;
+  tctx.beginPath(); tctx.moveTo(0, H / 2); tctx.lineTo(W, H / 2); tctx.stroke();
+  const heat = S.shown[c];
+  tctx.strokeStyle = heat > 0.35 ? '#ff5a36' : heat > 0.12 ? '#ffb21e' : '#5fd3a8'; tctx.lineWidth = 2 * dpr; tctx.lineJoin = 'round';
+  tctx.beginPath(); h.forEach(([t, v], i) => (i ? tctx.lineTo(X(t), Y(v)) : tctx.moveTo(X(t), Y(v)))); tctx.stroke();
+  tctx.fillStyle = tctx.strokeStyle; tctx.beginPath(); tctx.arc(X(t1), Y(h[h.length - 1][1]), 3 * dpr, 0, 2 * Math.PI); tctx.fill();
+}
+function setPin(c) { S.pin = c; $('pin').hidden = c === null; }
+
+function loop() {
+  const now = (performance.now() - S.t0) / 1000;
+  if (S.running) {
+    if (S.source === 'demo') { drawDemo(demo.getContext('2d'), now, demo.width, demo.height); grab(now); }
+    else if (S.source === 'clip') { if (video.currentTime !== S.lastMedia) { S.lastMedia = video.currentTime; grab(video.currentTime + S.loops * (video.duration || 0)); } }
+    else grab(now);
+  }
+  render();
+  requestAnimationFrame(loop);
+}
+video.addEventListener('timeupdate', () => { if (video.currentTime < S.lastMedia - 0.5) S.loops = (S.loops || 0) + 1; });
+
+// \u2500\u2500\u2500 Sources \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+function stopStream() { if (S.stream) { S.stream.getTracks().forEach(t => t.stop()); S.stream = null; } }
+function useSource(kind) {
+  S.source = kind; demo.hidden = kind !== 'demo'; video.hidden = kind === 'demo';
+  $('cam').classList.toggle('on', kind === 'camera'); $('clip').classList.toggle('on', kind === 'clip');
+  layout(); setPin(null); S.lastMedia = -1; S.loops = 0; S.t0 = performance.now();
+  updateChips();
+}
+function updateChips() {
+  const exp = $('exp');
+  if (S.source === 'camera' && S.exposure) {
+    exp.className = 'chip ok'; exp.innerHTML = ICON.sun + S.exposure.label; exp.dataset.tip = S.exposure.tip;
+  } else if (S.source === 'camera') {
+    exp.className = 'chip warn'; exp.innerHTML = ICON.sun + 'auto';
+    exp.dataset.tip = 'This browser does not allow manual exposure, so the phone sets it. Slow flicker works; fast (120 Hz) stripes show only in bright light. Android Chrome supports manual exposure.';
+  } else if (S.source === 'clip') { exp.className = 'chip'; exp.textContent = 'clip'; exp.dataset.tip = 'Your video clip, looping. Fast flicker shows only if the clip has stripes.'; }
+  else { exp.className = 'chip warn'; exp.textContent = 'demo'; exp.dataset.tip = 'A sample ceiling: one fixture drops out, one shows stripes. Tap the camera to look at your own ceiling.'; }
+  $('mode').innerHTML = ICON[S.mode]; $('mode').dataset.tip = MODE_TIP[S.mode]; $('mode').setAttribute('aria-label', MODE_TIP[S.mode]);
+  $('run').innerHTML = S.running ? ICON.pause : ICON.play; $('run').setAttribute('aria-label', S.running ? 'Pause' : 'Resume');
+  $('gridn').textContent = S.cols;
+}
+
+async function startCamera() {
+  if (!navigator.mediaDevices?.getUserMedia) return showMsg('No camera here.', 'This browser has no camera access. Open the page in Chrome or Safari on your phone, or open a video clip.');
+  try {
+    stopStream();
+    const stream = await navigator.mediaDevices.getUserMedia({audio: false, video: {facingMode: {ideal: 'environment'},
+      width: {ideal: 1280}, height: {ideal: 720}, frameRate: {ideal: 60}}});
+    S.stream = stream; video.srcObject = stream; video.loop = false; await video.play();
+    S.exposure = await shortExposure(stream.getVideoTracks()[0]);
+    $('msg').hidden = true; useSource('camera');
+  } catch (e) {
+    const name = e && e.name;
+    if (name === 'NotAllowedError' || name === 'SecurityError')
+      showMsg('Camera blocked.', 'Allow the camera for this page in your browser settings, then tap the camera again. Or record a 5 s clip of the ceiling and open it here.');
+    else if (name === 'NotFoundError' || name === 'OverconstrainedError')
+      showMsg('No camera found.', 'Connect a camera, or record a 5 s clip of the ceiling with your phone and open it here.');
+    else
+      showMsg('Camera did not start.', 'Another app may be using it. Close that app and tap the camera again, or open a video clip.');
+  }
+}
+// Ask for a short manual exposure, fixed focus and white balance where the browser allows
+// (Chrome on Android). Each setting separately: one refusal must not undo the others.
+async function shortExposure(track) {
+  const caps = track.getCapabilities ? track.getCapabilities() : {};
+  const set = async c => { try { await track.applyConstraints({advanced: [c]}); return true; } catch { return false; } };
+  if (caps.focusMode?.includes('manual')) await set({focusMode: 'manual'});
+  else if (caps.focusMode?.includes('single-shot')) await set({focusMode: 'single-shot'});
+  if (caps.whiteBalanceMode?.includes('manual')) await set({whiteBalanceMode: 'manual'});
+  if (!caps.exposureMode?.includes('manual') || !caps.exposureTime) return null;
+  // exposureTime is in 100 us units: aim for 1/2000 s, never below what the camera offers.
+  const want = Math.min(caps.exposureTime.max, Math.max(caps.exposureTime.min, 5));
+  if (!(await set({exposureMode: 'manual', exposureTime: want}))) return null;
+  if (caps.iso) await set({iso: Math.min(caps.iso.max, Math.max(caps.iso.min, 800))});
+  const got = track.getSettings().exposureTime || want, denom = Math.round(10000 / got);
+  return {label: `1/${denom}`, tip: `Manual exposure 1/${denom} s: short enough for the rolling shutter to show 120 Hz flicker as stripes.`};
+}
+function showMsg(text, help) { $('msgtext').textContent = text; $('msghelp').textContent = help; $('msg').hidden = false; }
+
+$('cam').onclick = startCamera;
+$('clip').onclick = $('msgclip').onclick = () => $('file').click();
+$('msgdemo').onclick = () => { $('msg').hidden = true; stopStream(); useSource('demo'); };
+$('file').onchange = async () => {
+  const f = $('file').files[0]; if (!f) return;
+  stopStream(); video.srcObject = null; video.src = URL.createObjectURL(f); video.loop = true;
+  try { await video.play(); $('msg').hidden = true; S.exposure = null; useSource('clip'); }
+  catch { showMsg('That clip did not play.', 'Try an MP4 or MOV recorded with the phone camera.'); }
+};
+$('run').onclick = () => { S.running = !S.running; if (S.source !== 'demo') S.running ? video.play() : video.pause(); updateChips(); };
+$('grid').onclick = () => { S.cols = GRIDS[(GRIDS.indexOf(S.cols) + 1) % GRIDS.length]; layout(); updateChips(); };
+$('mode').onclick = () => { S.mode = {both: 'slow', slow: 'fast', fast: 'both'}[S.mode]; updateChips(); };
+$('sens').oninput = e => { S.sens = Number(e.target.value); };
+$('unpin').onclick = () => setPin(null);
+$('info').onclick = () => { $('legend').hidden = !$('legend').hidden; };
+heatC.addEventListener('click', e => {
+  if (!$('legend').hidden) { $('legend').hidden = true; return; }
+  const b = heatC.getBoundingClientRect(), an = S.an;
+  const c = Math.floor((e.clientY - b.top) / b.height * an.rows) * an.cols + Math.floor((e.clientX - b.left) / b.width * an.cols);
+  setPin(S.pin === c ? null : c);
+});
+
+// Tooltips: hover with a mouse, press and hold on touch.
+const tip = $('tip'); let holdTimer = null;
+function showTip(el) {
+  const text = el.dataset.tip; if (!text) return;
+  tip.textContent = text; tip.hidden = false;
+  const r = el.getBoundingClientRect(), s = stage.getBoundingClientRect(), tw = tip.offsetWidth, th = tip.offsetHeight;
+  let x = Math.min(Math.max(8, r.left + r.width / 2 - tw / 2 - s.left), s.width - tw - 8);
+  let y = r.top - s.top - th - 8; if (y < 8) y = r.bottom - s.top + 8;
+  tip.style.left = `${x}px`; tip.style.top = `${y}px`;
+}
+document.querySelectorAll('[data-tip]').forEach(el => {
+  el.addEventListener('pointerenter', e => { if (e.pointerType === 'mouse') showTip(el); });
+  el.addEventListener('pointerleave', () => { tip.hidden = true; });
+  el.addEventListener('click', () => { tip.hidden = true; });
+  el.addEventListener('pointerdown', e => { if (e.pointerType !== 'mouse') holdTimer = setTimeout(() => showTip(el), 420); });
+  ['pointerup', 'pointercancel'].forEach(t => el.addEventListener(t, () => { clearTimeout(holdTimer); setTimeout(() => { tip.hidden = true; }, 1600); }));
+});
+
+new ResizeObserver(layout).observe(stage);
+layout(); updateChips(); requestAnimationFrame(loop);
+// ?camera starts the camera at once (used by the fake-camera test).
+if (/[?&]camera\b/.test(location.search)) startCamera();
+window.FF = {Analyzer, S, drawDemo};
+</script>
