@@ -15,7 +15,7 @@ def to_screen(vx, vy, W, H):
 res = {}
 with sync_playwright() as p:
     b = p.chromium.launch(executable_path=SHELL, args=['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream',
-        f'--use-file-for-fake-video-capture={HERE / "test/ceiling.y4m"}', '--use-angle=swiftshader'])
+        f'--use-file-for-fake-video-capture={HERE / "test/ceiling.y4m"}', '--disable-gpu'])
     for name, W, H in (('phone', 390, 844), ('desktop', 1280, 800)):
         ctx = b.new_context(viewport={'width': W, 'height': H}, permissions=['camera'], device_scale_factor=2 if name == 'phone' else 1)
         pg = ctx.new_page(); errs = []
@@ -46,13 +46,17 @@ with sync_playwright() as p:
     b.close()
     # Demo mode (what the published artifact opens with) and a denied camera: a browser that
     # neither fakes nor auto-accepts the camera.
-    b = p.chromium.launch(executable_path=SHELL, args=['--use-angle=swiftshader', '--deny-permission-prompts'])
+    b = p.chromium.launch(executable_path=SHELL, args=['--disable-gpu', '--deny-permission-prompts'])
     ctx = b.new_context(viewport={'width': 390, 'height': 844}, device_scale_factor=2); pg = ctx.new_page()
     pg.goto(url); pg.wait_for_timeout(4500); pg.screenshot(path=str(SHOTS / 'demo-phone.png'))
     res['demo_hot'] = pg.evaluate("() => Array.from(FF.S.shown).map((v,i)=>[i,+v.toFixed(2)]).sort((a,b)=>b[1]-a[1]).slice(0,3)")
+    # the demo's sagging lamp (row 3, left; center 90, 538 in the 360x640 demo): pin it, let dips pile up
+    pg.mouse.click(*to_screen(90, 538, 390, 844)); pg.mouse.move(380, 300); pg.wait_for_timeout(9000)
+    res['demo_dip'] = pg.evaluate("() => { const S = FF.S, c = S.pin; return {cell: c, heat: +S.shown[c].toFixed(2), events: S.an.events[c].length}; }")
+    pg.screenshot(path=str(SHOTS / 'demo-pinned-phone.png'))
     pg.click('#cam'); pg.wait_for_timeout(1500); pg.screenshot(path=str(SHOTS / 'denied-phone.png'))
     res['denied_text'] = pg.text_content('#msgtext'); res['denied_shown'] = pg.is_visible('#msg'); ctx.close(); b.close()
 print(json.dumps(res, indent=1))
 ok = all(res[n]['source'] == 'camera' and res[n]['worst_on_slow'] and res[n]['band_glows'] and res[n]['steady_max'] < 0.25 and not res[n]['errors'] for n in ('phone', 'desktop'))
-ok = ok and res['denied_shown']
+ok = ok and res['denied_shown'] and res['demo_dip']['events'] > 0
 print('PASS' if ok else 'FAIL'); sys.exit(0 if ok else 1)
